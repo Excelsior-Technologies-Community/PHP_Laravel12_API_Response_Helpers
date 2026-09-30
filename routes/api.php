@@ -152,6 +152,11 @@ Route::post(
     [ProductController::class, 'duplicate']
 );
 
+Route::post(
+    'products/batch',
+    [ProductController::class, 'batchExecute']
+);
+
 /*
 |--------------------------------------------------------------------------
 | Standard Product CRUD

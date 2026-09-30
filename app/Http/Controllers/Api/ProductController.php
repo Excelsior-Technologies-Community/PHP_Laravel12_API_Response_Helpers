@@ -696,4 +696,128 @@ class ProductController extends BaseApiController
             'products' => $products,
         ]);
     }
+
+    /**
+     * Batch Execution of multiple API operations in one call.
+     *
+     * POST /api/products/batch
+     */
+    public function batchExecute(Request $request)
+    {
+        $data = $request->validate([
+            'operations' => 'required|array|min:1|max:20',
+            'operations.*.action' => 'required|string|in:get,create,update,delete',
+            'operations.*.id' => 'nullable|integer',
+            'operations.*.data' => 'nullable|array',
+            'operations.*.data.name' => 'nullable|string|max:255',
+            'operations.*.data.price' => 'nullable|integer|min:0',
+        ]);
+
+        $results = [];
+
+        DB::beginTransaction();
+        try {
+            foreach ($data['operations'] as $index => $op) {
+                $action = $op['action'];
+                $id = $op['id'] ?? null;
+                $payload = $op['data'] ?? [];
+
+                switch ($action) {
+                    case 'get':
+                        $product = Product::find($id);
+                        $results[] = [
+                            'op_index' => $index,
+                            'action' => 'get',
+                            'status' => $product ? 200 : 404,
+                            'result' => $product ?? 'Product not found',
+                        ];
+                        break;
+
+                    case 'create':
+                        $product = Product::create([
+                            'name' => $payload['name'] ?? ('Batch Product ' . rand(100, 999)),
+                            'price' => $payload['price'] ?? rand(100, 5000),
+                        ]);
+                        ProductActivity::create([
+                            'product_id' => $product->id,
+                            'action' => 'created',
+                            'product_name' => $product->name,
+                            'product_price' => $product->price,
+                            'description' => 'Product created via Batch execution.',
+                        ]);
+                        $results[] = [
+                            'op_index' => $index,
+                            'action' => 'create',
+                            'status' => 201,
+                            'result' => $product,
+                        ];
+                        break;
+
+                    case 'update':
+                        $product = Product::find($id);
+                        if ($product) {
+                            $product->update(array_filter($payload));
+                            ProductActivity::create([
+                                'product_id' => $product->id,
+                                'action' => 'updated',
+                                'product_name' => $product->name,
+                                'product_price' => $product->price,
+                                'description' => 'Product updated via Batch execution.',
+                            ]);
+                            $results[] = [
+                                'op_index' => $index,
+                                'action' => 'update',
+                                'status' => 200,
+                                'result' => $product,
+                            ];
+                        } else {
+                            $results[] = [
+                                'op_index' => $index,
+                                'action' => 'update',
+                                'status' => 404,
+                                'result' => 'Product not found for update',
+                            ];
+                        }
+                        break;
+
+                    case 'delete':
+                        $product = Product::find($id);
+                        if ($product) {
+                            ProductActivity::create([
+                                'product_id' => $product->id,
+                                'action' => 'deleted',
+                                'product_name' => $product->name,
+                                'product_price' => $product->price,
+                                'description' => 'Product deleted via Batch execution.',
+                            ]);
+                            $product->delete();
+                            $results[] = [
+                                'op_index' => $index,
+                                'action' => 'delete',
+                                'status' => 200,
+                                'result' => 'Product deleted successfully',
+                            ];
+                        } else {
+                            $results[] = [
+                                'op_index' => $index,
+                                'action' => 'delete',
+                                'status' => 404,
+                                'result' => 'Product not found for deletion',
+                            ];
+                        }
+                        break;
+                }
+            }
+
+            DB::commit();
+
+            return $this->respondWithSuccess([
+                'total_operations' => count($data['operations']),
+                'results' => $results,
+            ]);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            return $this->respondError('Batch execution failed: ' . $e->getMessage());
+        }
+    }
 }
